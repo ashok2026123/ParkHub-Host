@@ -1,5 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { 
+  auth, 
+  signInWithPopup, 
+  googleProvider,
+  signInWithEmailAndPassword, 
+  signOut,
+  onAuthStateChanged
+} from './firebase';
+import { 
   INITIAL_LOCATIONS, 
   INITIAL_BOOKINGS 
 } from '../../web-user/src/services/mockDb'; // Reuse shared seed schemas
@@ -47,6 +55,60 @@ export default function App() {
     const saved = localStorage.getItem('parkeasy_owner');
     return saved ? JSON.parse(saved) : null;
   });
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      if (firebaseUser) {
+        const email = firebaseUser.email || '';
+        const cleanInput = email.trim().toLowerCase();
+        const isSuresh = cleanInput === 'suresh@spotowner.com';
+        
+        let loggedUser;
+        if (isSuresh) {
+          loggedUser = {
+            uid: firebaseUser.uid,
+            name: firebaseUser.displayName || "Suresh Perumal",
+            email: firebaseUser.email,
+            phone: firebaseUser.phoneNumber || "+91 94440 12345",
+            role: "owner",
+            verified: true,
+            gstin: "33AABCP8921J1Z0",
+            profilePic: firebaseUser.photoURL || "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&q=80&w=200",
+            createdAt: new Date().toISOString()
+          };
+        } else {
+          loggedUser = {
+            uid: firebaseUser.uid,
+            name: firebaseUser.displayName || "Host User",
+            email: firebaseUser.email,
+            phone: firebaseUser.phoneNumber || "+91 90000 00000",
+            role: "owner",
+            verified: true,
+            gstin: "33AABCP" + Math.floor(1000 + Math.random() * 9000) + "J1Z0",
+            profilePic: firebaseUser.photoURL || "https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?auto=format&fit=crop&q=80&w=200",
+            createdAt: new Date().toISOString()
+          };
+        }
+        
+        try {
+          await fetch(`${API_URL}/owners/${loggedUser.uid}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(loggedUser)
+          });
+        } catch (e) {
+          console.error("Error syncing owner profile:", e);
+        }
+
+        setUser(loggedUser);
+        localStorage.setItem('parkeasy_owner', JSON.stringify(loggedUser));
+      } else {
+        setUser(null);
+        localStorage.removeItem('parkeasy_owner');
+      }
+    });
+    return () => unsubscribe();
+  }, [API_URL]);
 
   const [locations, setLocations] = useState(INITIAL_LOCATIONS);
   const [bookings, setBookings] = useState(INITIAL_BOOKINGS);
@@ -179,7 +241,7 @@ export default function App() {
     return () => clearInterval(interval);
   }, []);
 
-  const handleLoginWithCredentials = (emailOrPhone, password) => {
+  const handleLoginWithCredentials = async (emailOrPhone, password) => {
     const cleanInput = emailOrPhone.trim().toLowerCase().replace(/\s+/g, '');
     
     // Check if it's admin or customer credentials to show role restriction error
@@ -193,41 +255,20 @@ export default function App() {
       throw new Error("This portal is restricted to Parking Hosts. Please log in at the Customer App.");
     }
     
-    const isSuresh = cleanInput === 'suresh@spotowner.com' || cleanInput === '+919444012345' || cleanInput === '9444012345';
-    
-    let loggedUser;
-    if (isSuresh) {
-      loggedUser = {
-        uid: "owner-456",
-        name: "Suresh Perumal",
-        email: "suresh@spotowner.com",
-        phone: "+91 94440 12345",
-        role: "owner",
-        verified: true,
-        gstin: "33AABCP8921J1Z0",
-        profilePic: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&q=80&w=200",
-        createdAt: new Date().toISOString()
-      };
-    } else {
-      loggedUser = {
-        uid: "owner-" + Math.floor(Math.random() * 1000),
-        name: emailOrPhone.includes('@') ? emailOrPhone.split('@')[0] : "Host User",
-        email: emailOrPhone.includes('@') ? emailOrPhone : `${cleanInput}@spotowner.com`,
-        phone: emailOrPhone.includes('@') ? "+91 90000 00000" : emailOrPhone,
-        role: "owner",
-        verified: true,
-        gstin: "33AABCP" + Math.floor(1000 + Math.random() * 9000) + "J1Z0",
-        profilePic: "https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?auto=format&fit=crop&q=80&w=200",
-        createdAt: new Date().toISOString()
-      };
+    try {
+      const loginEmail = emailOrPhone.includes('@') ? emailOrPhone : `${cleanInput}@spotowner.com`;
+      await signInWithEmailAndPassword(auth, loginEmail, password);
+    } catch (e) {
+      throw new Error(e.message || "Failed to log in with credentials.");
     }
-    
-    setUser(loggedUser);
-    localStorage.setItem('parkeasy_owner', JSON.stringify(loggedUser));
-    return loggedUser;
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    try {
+      await signOut(auth);
+    } catch (e) {
+      console.error("Error signing out:", e);
+    }
     setUser(null);
     localStorage.removeItem('parkeasy_owner');
   };
@@ -920,7 +961,7 @@ export default function App() {
   };
 
   if (!user) {
-    return <LoginScreen onLogin={handleLoginWithCredentials} roleHint="Parking Host" />;
+    return <LoginScreen onLogin={handleLoginWithCredentials} onGoogleLogin={async () => { await signInWithPopup(auth, googleProvider); }} roleHint="Parking Host" />;
   }
 
   return (
@@ -2927,7 +2968,7 @@ export default function App() {
   );
 }
 
-function LoginScreen({ onLogin, roleHint }) {
+function LoginScreen({ onLogin, onGoogleLogin, roleHint }) {
   const [emailOrPhone, setEmailOrPhone] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -3711,6 +3752,41 @@ function LoginScreen({ onLogin, roleHint }) {
               }}
             >
               Secure Login
+            </button>
+            <button
+              type="button"
+              onClick={async () => {
+                try {
+                  if (onGoogleLogin) await onGoogleLogin();
+                } catch (e) {
+                  setError(e.message || "Google sign-in failed.");
+                }
+              }}
+              style={{
+                width: '100%',
+                padding: '12px',
+                background: 'rgba(255, 255, 255, 0.08)',
+                border: '1px solid rgba(255, 255, 255, 0.12)',
+                borderRadius: '12px',
+                color: '#FFF',
+                fontSize: '13px',
+                cursor: 'pointer',
+                fontWeight: '600',
+                marginTop: '8px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '8px',
+                boxSizing: 'border-box'
+              }}
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
+                <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
+                <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" fill="#FBBC05"/>
+                <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" fill="#EA4335"/>
+              </svg>
+              <span>Sign in with Google</span>
             </button>
           </form>
 
